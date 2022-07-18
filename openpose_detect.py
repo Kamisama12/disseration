@@ -49,8 +49,8 @@ try:
     params["net_resolution"] = "-1x80"#"320x320"
     #params["face"] = True
     params["hand"] = False
-    params["camera_resolution"] = "1280x1280"
-    #params["hand_net_resolution"] = "368x368"
+    #params["camera_resolution"] = "1280x1280"
+    #params["hand_net_resolution"] = "192x192"
 
     # Add others in path?
     for i in range(0, len(args[1])):
@@ -139,12 +139,25 @@ try:
         # print(np.shape(input))
         # print(input)
         # print(input[0])
+        # print(input[0][2:])
         predicted_label=classifer.predict(input[0])
-        print(type(predicted_label))
-        print("prediced label is :", predicted_label)
+        # print(type(predicted_label))
+        #print("prediced label is :", predicted_label)
+        if predicted_label == 'handsdown':
+            print("this is handsdown ")
+        if predicted_label == 'handsup':
+            print("this is handsup ")
         image_disp=datum.cvOutputData
+        print("shape of output:", image_disp.shape)
+        # input = pose_normalization(input[0])
         drawActionResult(image_disp, input[0], predicted_label)
-        cv2.imshow("acation_recognition", image_disp)
+        # image_disp = cv2.putText(image_disp,'test', org, font, 
+        #             fontScale, color, thickness, cv2.LINE_AA)
+        
+        
+        
+        
+        cv2.imshow("acation_recognition", cv2.resize(image_disp,(0,0),fx=1.5,fy=1.5))
         if cv2.waitKey(20) & 0xFF == ord('q'):#waitkey同时表示每一帧的显示间隔
             break
         #datum.poseKeypoints 是一个三维的数组，
