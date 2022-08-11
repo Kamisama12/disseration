@@ -33,7 +33,7 @@ from pygame.locals import *
 import numpy as np
 
 from pyomyo import Myo, emg_mode
-
+from scipy.signal import butter, lfilter
 SUBSAMPLE = 3
 K = 15
 
@@ -47,12 +47,12 @@ class Classifier(object):
 		self.color = color
 
 		for i in range(10):
-			with open('./EMG_part/datacollect/2nd_collect/data%d.dat' % i, 'ab') as f: pass
+			with open('./EMG_part/datacollect/3nd_collect/data%d.dat' % i, 'ab') as f: pass
 		self.read_data()
 
 	def store_data(self, cls, vals):
-		with open('./EMG_part/datacollect/2nd_collect/data%d.dat' % cls, 'ab') as f:
-			f.write(pack('8H', *vals))
+		with open('./EMG_part/datacollect/3nd_collect/data%d.dat' % cls, 'ab') as f:
+			f.write(pack('8f', *vals))
 
 		self.train(np.vstack([self.X, vals]), np.hstack([self.Y, [cls]]))
 
@@ -60,14 +60,14 @@ class Classifier(object):
 		X = []
 		Y = []
 		for i in range(10):
-			X.append(np.fromfile('./EMG_part/datacollect/2nd_collect/data%d.dat' % i, dtype=np.uint16).reshape((-1, 8)))
+			X.append(np.fromfile('./EMG_part/datacollect/3nd_collect/data%d.dat' % i, dtype=np.float32).reshape((-1, 8)))
 			Y.append(i + np.zeros(X[-1].shape[0]))
 
 		self.train(np.vstack(X), np.hstack(Y))
 
 	def delete_data(self):
 		for i in range(10):
-			with open('./EMG_part/datacollect/2nd_collect/data%d.dat' % i, 'wb') as f: pass
+			with open('./EMG_part/datacollect/3nd_collect/data%d.dat' % i, 'wb') as f: pass#w模式打开文件会清空文件
 		self.read_data()
 
 	def train(self, X, Y):
@@ -81,13 +81,17 @@ class Classifier(object):
 		return self.Y[ind]
 
 	def classify(self, d):
-		if self.X.shape[0] < K * SUBSAMPLE: return 0
-		return self.nearest(d)
+		# if self.X.shape[0] < K * SUBSAMPLE: return 0
+		# return self.nearest(d)
+		return 1
 
 class MyoClassifier(Myo):
 	'''Adds higher-level pose classification and handling onto Myo.'''
-
-	def __init__(self, cls, tty=None, mode=emg_mode.PREPROCESSED, hist_len=25,Networkmode=False):#源码中的hist_len长度是25，实验的CNN神经网络模型是用的12帧作为一张图片，改成12
+	# Filter requirements.
+	order = 1
+	fs = 100   #100   # sample rate, Hz
+	cutoff = 1 # 1 # desired cutoff frequency of the filter, Hz
+	def __init__(self, cls, tty=None, mode=emg_mode.RAW, hist_len=25,Networkmode=False):#源码中的hist_len长度是25，实验的CNN神经网络模型是用的12帧作为一张图片，改成12
 		Myo.__init__(self, tty, mode=mode)
 		# Add a classifier
 		self.cls = cls
@@ -104,29 +108,38 @@ class MyoClassifier(Myo):
 		self.data_sav=multiprocessing.Queue()#用来存储数据给主进程的神经网络predict用,传一个多进程队列进来
 
 	def emg_handler(self, emg, moving):#这个函数用于分类和对比历史帧的次数
-		#y = self.cls.classify(emg)#这里的数据应该是只有一帧，用 CNN网络的时候需要有12帧
-		self.yuzhaohao_datacount.append(emg)
+		#y = self.cls.classify(emg)#这里的数据应该是只有一帧，用CNN网络的时候需要有12帧
+		#8.6更新：接受数据的模式改为raw，回来的数据先经过低通滤波
+		# print("this is Myo emg)handler:",emg)
+		# print("start filter")
+		emg=self.butter_lowpass(self.cutoff,self.fs,emg,self.order)
+		# self.yuzhaohao_datacount.append(emg)
+		# print(len(self.yuzhaohao_datacount) )
 		if self.networkmode==True:
-			if len(self.yuzhaohao_datacount) is 12:#存够12个数据之后当作一帧图像用于传入神经网络
-				#y=self.cls.classify(self.yuzhaohao_datacount)
+			# if len(self.yuzhaohao_datacount) >= 712:#存够200个数据之后传给我们的进行队列，在主进程中滑窗处理这200个数据
+				# print("start classify")
 				#在和opnepose融合的时候不能在子进程中调用predict，这个函数在run函数中会调用
 				#所以注释掉classify，run中只读取数据
-				if not(self.data_sav.full()):
-					self.data_sav.put(self.yuzhaohao_datacount)
-				elif not(self.data_sav.empty()):
-					self.data_sav.get()#队列满了的时候,先把头部去掉一个（这个操作可能导致帧数对不上？）
-					self.data_sav.put(self.yuzhaohao_datacount)
-				self.yuzhaohao_datacount=[]#清空我们的缓存数据
+			if not(self.data_sav.full()):
+				self.data_sav.put(emg)
+			elif not(self.data_sav.empty()):
+				self.data_sav.get()#队列满了的时候,先把头部去掉一个（这个操作可能导致帧数对不上？）
+				self.data_sav.put(emg)
+				# self.yuzhaohao_datacount=[]#清空我们的缓存数据
+				#下面代码在不是yzh_main.py运行的时候要取消注释,
+				# 但是后面因为采用了滑窗的处理方式，classify和emg数据接受要分开两个进程运行，下面的代码移到主进程
 				# self.history_cnt[self.history[0]] -= 1
 				# #最左端出队列，计数器中最左端的键的计数减一
 				# self.history_cnt[y] += 1
 				# #新传进来的键值y加一
 				# self.history.append(y)
-
+				# print("22222222")
 				# r, n = self.history_cnt.most_common(1)[0]
+				# print("44444")
 				# #counter.most_common(n)函数返回的是列表中出现次数排在前n位的元素，元组形式返回('值'，'出现次数')
 				# if self.last_pose is None or (n > self.history_cnt[self.last_pose] + 5 and n > self.hist_len / 2):
 				# 	#队列中的出现最多的判断姿态大于上一次判断的姿态的个数5个同时超过一半是这个姿态就刷新姿势
+				# 	print("333333")
 				# 	self.on_raw_pose(r)#打印pose
 				# 	print("this is raw pose!")
 				# 	self.last_pose = r
@@ -140,6 +153,15 @@ class MyoClassifier(Myo):
 				self.on_raw_pose(r)#打印pose
 				print("this is raw pose!")
 				self.last_pose = r
+
+	#低通滤波器
+	def butter_lowpass(self,cutoff, fs, data,order=5):
+		nyq = 0.5 * fs#nyquist frequency， 是采样频率的一半，等于最大的信号频率
+		normal_cutoff = cutoff / nyq #3dB带宽点
+		b, a = butter(order, normal_cutoff, btype='low', analog=False)#返回滤波器的系数,应该是一个传递函数的系数
+		y=lfilter(b, a, data)
+		return y
+
 
 	def add_raw_pose_handler(self, h):
 		self.pose_handlers.append(h)
@@ -203,15 +225,28 @@ def text(scr, font, txt, pos, clr=(255,255,255)):
 
 
 class EMGHandler(object):
+	order = 1
+	fs = 100      # sample rate, Hz
+	cutoff = 1  # desired cutoff frequency of the filter, Hz
 	def __init__(self, m):
 		self.recording = -1
 		self.m = m
 		self.emg = (0,) * 8
 
 	def __call__(self, emg, moving):
+		# print("this is EMGHandler raw data :",emg)
+		emg=self.butter_lowpass(self.cutoff,self.fs,emg,self.order)#滤波之后才作为当前的数据
 		self.emg = emg
+		# print("data after filter:",self.emg)
 		if self.recording >= 0:
 			self.m.cls.store_data(self.recording, emg)
+
+	def butter_lowpass(self,cutoff, fs, data,order=5):
+		nyq = 0.5 * fs#nyquist frequency， 是采样频率的一半，等于最大的信号频率
+		normal_cutoff = cutoff / nyq #3dB带宽点
+		b, a = butter(order, normal_cutoff, btype='low', analog=False)#返回滤波器的系数,应该是一个传递函数的系数
+		y=lfilter(b, a, data)
+		return y
 
 class Live_Classifier(Classifier):
 	'''
@@ -237,6 +272,17 @@ class Live_Classifier(Classifier):
 		x = np.array(emg).reshape(1,-1)
 		pred = self.model.predict(x)
 		return int(pred[0])
+
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
 	pygame.init()
