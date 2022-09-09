@@ -1,6 +1,7 @@
 
 
-
+import imp
+from sklearn import metrics
 from sklearn.metrics import mean_squared_error  # metric MSE
 from sklearn.metrics import r2_score  # metric R^2
 from sklearn.model_selection import train_test_split  # dataset split
@@ -19,18 +20,20 @@ from sklearn import neighbors
 from pyomyo import Myo, emg_mode
 from pyomyo.Classifier import Live_Classifier, Classifier, MyoClassifier, EMGHandler
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.svm import SVC,LinearSVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from sklearn.naive_bayes import GaussianNB
 import pandas as pd
 from pynput.keyboard import Key, Controller, Listener
+sys.path.append("./EMG_part")
 from RFmodel import *
 import os
+from sklearn.pipeline import make_pipeline
 #下面的代码出现DNNlibrary notfound的时候加入
 os.environ['CUDA_VISIBLE_DEVICES'] = '/gpu:0'
-sys.path.append("./EMG_part")
+
 #import MyLearningModelPredict
 
 SUBSAMPLE = 3
@@ -49,11 +52,17 @@ class KNN_Classifier(Classifier):
         self.X = X
         self.Y = Y
         self.model = None
+        
         if self.X.shape[0] >= K * SUBSAMPLE:
+            X_train,X_test,Y_train,Y_test=train_test_split(self.X,self.Y,test_size=0.2,random_state=2)
             self.model = neighbors.KNeighborsClassifier(
                 n_neighbors=K, algorithm='kd_tree')
-            self.model.fit(self.X[::SUBSAMPLE], self.Y[::SUBSAMPLE])
-
+            # self.model.fit(self.X[::SUBSAMPLE], self.Y[::SUBSAMPLE])
+            self.model.fit(X_train[::SUBSAMPLE], Y_train[::SUBSAMPLE])
+            print("accuracy:",metrics.accuracy_score(Y_test,self.model.predict(X_test)))
+            print("precision",metrics.precision_score(Y_test,self.model.predict(X_test),average='macro'))
+            print("recall",metrics.recall_score(Y_test,self.model.predict(X_test),average='macro'))
+            print("F1",metrics.f1_score(Y_test,self.model.predict(X_test),average='macro'))
     def classify(self, emg):
         # 分类函数调用在MyoClassifier里面的计数函数内，实时值存在last_pose中
         # 最终输出用户的值为经过25帧过滤之后的结果。
@@ -121,11 +130,20 @@ class SVM_Classifier(Live_Classifier):
         self.Y = Y
         try:
             if self.X.shape[0] > 0:
+                X_train,X_test,Y_train,Y_test=train_test_split(self.X,self.Y,test_size=0.2,random_state=2)
                 clf = make_pipeline(StandardScaler(), SVC(gamma='auto'))
-                #clf = make_pipeline(StandardScaler(), SVC(kernel="linear", C=0.025))
-
+                # clf = make_pipeline(StandardScaler(), SVC(kernel="linear", C=0.025))
+                # self.model=LinearSVC()
+                print("start train")
                 clf.fit(self.X, self.Y)
+                # clf.fit(X_train, Y_train)
+
                 self.model = clf
+                print("start predict")
+                print("accuracy:",metrics.accuracy_score(Y_test,self.model.predict(X_test)))
+                print("precision",metrics.precision_score(Y_test,self.model.predict(X_test),average='macro'))
+                print("recall",metrics.recall_score(Y_test,self.model.predict(X_test),average='macro'))
+                print("F1",metrics.f1_score(Y_test,self.model.predict(X_test),average='macro'))
         except:
             # SVM Errors when we only have data for 1 class.
             self.model = None
@@ -173,8 +191,18 @@ class LR_Classifier(Live_Classifier):
         self.Y = Y
         try:
             if self.X.shape[0] > 0:
+                
+                X_train,X_test,Y_train,Y_test=train_test_split(self.X,self.Y,test_size=0.5,random_state=2)
+                
                 self.model = LogisticRegression()
-                self.model.fit(self.X, self.Y)
+
+                self.model.fit(X_train, Y_train)
+
+                print("start predict")
+                print("accuracy:",metrics.accuracy_score(Y_test,self.model.predict(X_test)))
+                print("precision",metrics.precision_score(Y_test,self.model.predict(X_test),average='macro'))
+                print("recall",metrics.recall_score(Y_test,self.model.predict(X_test),average='macro'))
+                print("F1",metrics.f1_score(Y_test,self.model.predict(X_test),average='macro'))
         except:
             # LR Errors when we only have data for 1 class.
             self.model = None
@@ -309,7 +337,7 @@ def My_worker(q,m,hnd,on_press,on_release,key_emg_handler):  # 获取EMG数据
     while True:
         #print("1111111111111111")
         m.run()
-    #     m.run_gui(hnd, scr, font, w, h)
+        # m.run_gui(hnd, scr, font, w, h)
         # time.sleep(0.1)
         # print(m.last_pose,":real time pose(before process)")
         # print(hnd.emg,":real time data")
@@ -370,7 +398,7 @@ if __name__ == "__main__":
     w, h = 800, 320
     scr = pygame.display.set_mode((w, h))
     font = pygame.font.Font(None, 30)
-    m = MyoClassifier(Yzh_CNN_Model(), mode=emg_mode.RAW, Networkmode=True)
+    m = MyoClassifier(SVM_Classifier(), mode=emg_mode.RAW, Networkmode=False)
     hnd = EMGHandler(m)
     # Set pygame window name
     # pygame.display.set_caption(m.cls.name)
@@ -381,23 +409,38 @@ if __name__ == "__main__":
     
     yzh = Yzh_CNN_Model()
     data=[]
-    model_RF=joblib.load('/home/y/mycode/EMG_part/RF_test')
+    model_RF=joblib.load('/home/y/mycode/EMG_part/regression_trained_model/RF_train_force_8-24')
+    t1=time.time()
     try:
+        count=0
         while True:
             # m.run()
             if not(m.data_sav.empty()):
                 data.append(m.data_sav.get())
+                # print(data)
+                # data=m.data_sav.get()
+                # print("shape of data :",data,np.shape(data))
                 # print("main process data",data)
+                # rms,mav,wl,zc,iemg,wamp,var,lodD=feature_extraction(np.array(data).reshape(1,8))
+                # print(rms,"\n",mav,"\n",wl,"\n",zc,"\n",iemg,"\n",wamp,"\n",var,"\n",lodD)
+                # temp=np.array([rms,mav,wl,zc,iemg,wamp,var,lodD]).reshape(-1,64)
+                # print(temp)
+                # print(temp.shape)
+                # print(model_RF.predict(temp))
+                
                 while len(data) >= 200:
-                    print("len of data:", len(data))
+                    # print("len of data:", len(data))
                     rms,mav,wl,zc,iemg,wamp,var,lodD=feature_extraction(np.array(data))#提取emg信号的特征
                     temp=np.array([rms,mav,wl,zc,iemg,wamp,var,lodD]).reshape(-1,64)
-                    print(model_RF.predict(temp))
+                    print("force:",model_RF.predict(temp))
                     # print("process data",data_toprocess[0])
                     # print(np.array(data_toprocess))
                     y=yzh.classify(data)
                     print("pose:",y)
-                    del data[0:50]
+                    del data[0:10]
+                    print(time.time()-t1)
+                    t1=time.time()
+                    # del data[0]
                     m.history_cnt[m.history[0]] -= 1
                     m.history_cnt[y] += 1
                 # #新传进来的键值y加一
